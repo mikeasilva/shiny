@@ -1,45 +1,90 @@
+library(dplyr)
+
 shinyServer(function(input, output, session){
   
   origin.data <- reactive({
-    data[data$Origin == input$msa.filter,]
+    data %>%
+      filter(Origin == input$msa.filter)
   })
   
   destination.data <- reactive({
-    data[data$Destination == input$msa.filter,]
+    data %>%
+      filter(Destination == input$msa.filter)
   })
   
-  createPlot <- function(msa.name, map.data, mode){  
-    library(maps)
-    library(geosphere)
-    xlim <- c(-171.738281, -56.601563)
-    ylim <- c(12.039321, 71.856229)
-    base.map <- map('world', col='#f2f2f2', fill=TRUE, bg='white', lwd=0.05, xlim=xlim, ylim=ylim)
-    
-    
-    if(mode == 'origin'){
-      pal <- colorRampPalette(c('#f2f2f2', 'green'))
-      title(paste0('Commodity Outflows for ', msa.name))
+  getMapData <- function(){
+    if(input$mode == 'Outflows'){
+      map.data <- origin.data()
     } else {
-      pal <- colorRampPalette(c('#f2f2f2', 'red'))
-      title(paste0('Commodity Inflows for ', msa.name))
+      map.data <- destination.data()
     }
-    colors <- pal(100)
-    max.value <- max(map.data$Value.in.millions.of.dollars)
-        
-    
-    for (j in 1:nrow(map.data)) 
-    {   
-      inter <- gcIntermediate(c(map.data[j,]$Origin.Lon, map.data[j,]$Origin.Lat), c(map.data[j,]$Destination.Lon, map.data[j,]$Destination.Lat), n=100, addStartEnd=TRUE)
-      colindex <- round((data[j,]$Value.in.millions.of.dollars/max.value) * length(colors))
-      lines(inter, col=colors[colindex], lwd=0.8)
-    }
+    map.data
   }
   
-  output$origin.plot <- renderPlot({
-    createPlot(input$msa.filter, origin.data(), 'origin')
-    })
+  getTableData <- function(){
+    table.data <-  getMapData() %>%
+      select(Destination, Origin, Value.in.millions.of.dollars) %>%
+      arrange(desc(Value.in.millions.of.dollars))
+    
+    names(table.data) <- c('Going to', 'Comming From', 'Value (millions of dollars)')
+    
+    if(input$mode == 'Outflows'){
+      table.data <- table.data[,names(table.data) %in% c('Going to', 'Value (millions of dollars)')]
+    }else{
+      table.data <- table.data[,2:3]
+    }
+    
+    table.data
+  }
   
-  output$destination.plot <- renderPlot({
-    createPlot(input$msa.filter, destination.data(), 'destination')
+  output$flow.table <- renderDataTable(
+    getTableData(),
+    options = list(
+      paging=FALSE,
+      searching = FALSE,
+      scrollY= 400
+    )
+  )
+  
+  createPlot <- function(map.data){  
+    library(maps)
+    library(geosphere)
+    
+    map('state', interior=FALSE, col='#CCCCCC')
+    map('state', boundary=FALSE, col='#F0F0F0', add=TRUE)
+    
+    ## Colors from http://colorbrewer2.org/
+    if(input$mode == 'Outflows'){
+      pal <- colorRampPalette(c('#e5f5e0', '#00441b')) # Green
+    } else {
+      pal <- colorRampPalette(c('#fee0d2', '#67000d')) # Red
+    }
+    
+    title(paste('Commodity', input$mode, 'for', input$msa.filter))
+    
+    colors <- pal(100)
+    
+    max.value <- max(map.data$Value.in.millions.of.dollars)
+    
+    ## Draw great circle for each flow line
+    for (j in 1:nrow(map.data)) 
+    {
+      m <- map.data[j,]
+      inter <- gcIntermediate(c(m$Origin.Lon, m$Origin.Lat), c(m$Destination.Lon, m$Destination.Lat), n=100, addStartEnd=TRUE)
+      colindex <- round((m$Value.in.millions.of.dollars/max.value) * length(colors))
+      lines(inter, col=colors[colindex], lwd=1)
+    }
+    
+    ## Plot all metros as points
+    metro <- data %>% 
+      select(Origin.Lat, Origin.Lon) %>% 
+      unique()    
+    points(metro$Origin.Lon, metro$Origin.Lat, pch=19, col='#CCCCCC')
+  }
+  
+  output$flow.plot <- renderPlot({  
+    map.data <- getMapData()
+    createPlot(map.data)
   })
+  
 })
